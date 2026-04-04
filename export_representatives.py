@@ -43,6 +43,7 @@ CSV_FIELDS = [
     "state",
     "district",
     "vacant",
+    "party",
 ]
 SPECIAL_STATE_IDENTIFIERS = {
     "American Samoa": "American Samoa",
@@ -84,6 +85,7 @@ class RepresentativeRow:
     state: str
     district: str
     vacant: bool
+    party: str
 
 
 class AssumptionViolationError(RuntimeError):
@@ -239,12 +241,21 @@ def normalize_historical_district(congress_number: int, state_text: str, distric
     return SPECIAL_DISTRICT_NORMALIZATION.get((congress_number, state_text, district_text), district_text)
 
 
+def parse_party_name(member_markup: str) -> str:
+    match = re.search(r"\{\{Party stripe\|([^}]+)\}\}", member_markup)
+    if not match:
+        return ""
+
+    party_name = match.group(1).strip()
+    return party_name
+
+
 def parse_congress_representatives(page_wikitext: str, term: str, congress_number: int) -> list[RepresentativeRow]:
     section = extract_congress_representatives_section(page_wikitext)
     rows: list[RepresentativeRow] = []
     seen_keys: set[tuple[str, str, str, bool]] = set()
 
-    def add_member_row(state_text: str, district_text: str, target: str) -> None:
+    def add_member_row(state_text: str, district_text: str, target: str, party: str = "") -> None:
         page_title = target.split("|", 1)[0].strip()
         display_name = target.split("|", 1)[-1].strip() if "|" in target else page_title
         state_name = resolve_state_name(state_text, "Congress representatives section")
@@ -256,6 +267,7 @@ def parse_congress_representatives(page_wikitext: str, term: str, congress_numbe
             state=state_name,
             district=normalized_district,
             vacant=False,
+            party=party,
         )
         key = (row.state, row.district, row.representative_wikipedia_page, row.vacant)
         if key not in seen_keys:
@@ -272,6 +284,7 @@ def parse_congress_representatives(page_wikitext: str, term: str, congress_numbe
             state=state_name,
             district=normalized_district,
             vacant=True,
+            party="",
         )
         key = (row.state, row.district, row.representative_wikipedia_page, row.vacant)
         if key not in seen_keys:
@@ -279,8 +292,8 @@ def parse_congress_representatives(page_wikitext: str, term: str, congress_numbe
             rows.append(row)
 
     entry_pattern = re.compile(
+        r"(?P<party>\{\{Party stripe\|[^}]+\}\})?"
         r"\{\{[Uu]shr\|(?P<state>[^|}]+)\|(?P<district>[^|}]+)\|(?P<mode>[^|}]+)\}\}(?:\.|)\s*"
-        r"(?:\{\{Party stripe\|[^}]+\}\})?"
         r"\[\[(?P<target>[^\[\]]+)\]\]",
         re.DOTALL,
     )
@@ -295,7 +308,8 @@ def parse_congress_representatives(page_wikitext: str, term: str, congress_numbe
         state_text = match.group("state").strip()
         district_text = match.group("district").strip()
         target = match.group("target").strip()
-        add_member_row(state_text, district_text, target)
+        party_name = parse_party_name(match.group(0))
+        add_member_row(state_text, district_text, target, party_name)
 
     for match in vacancy_pattern.finditer(section):
         state_text = match.group("state").strip()
@@ -315,6 +329,7 @@ def parse_congress_representatives(page_wikitext: str, term: str, congress_numbe
                 match.group("state").strip(),
                 match.group("district").strip(),
                 match.group("target").strip(),
+                parse_party_name(match.group(0)),
             )
 
     if congress_number == 35:
@@ -329,6 +344,7 @@ def parse_congress_representatives(page_wikitext: str, term: str, congress_numbe
                 match.group("state").strip(),
                 match.group("district").strip(),
                 match.group("target").strip(),
+                parse_party_name(match.group(0)),
             )
 
     if congress_number in {9, 10}:
@@ -349,8 +365,9 @@ def parse_congress_representatives(page_wikitext: str, term: str, congress_numbe
                 if len(targets) == 2:
                     break
             if len(targets) == 2:
-                add_member_row("New York", "2", targets[0])
-                add_member_row("New York", "3", targets[1])
+                party_name = parse_party_name(body)
+                add_member_row("New York", "2", targets[0], party_name)
+                add_member_row("New York", "3", targets[1], party_name)
 
     if not rows:
         ushr_count = section.count("{{ushr|") + section.count("{{Ushr|")
@@ -483,6 +500,7 @@ def parse_rows(table_wikitext: str) -> list[RepresentativeRow]:
                 state=state,
                 district=district,
                 vacant=False,
+                party="",
             )
         )
 
