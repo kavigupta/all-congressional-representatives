@@ -86,6 +86,7 @@ ALLOWED_PARTY_NAMES = {
     "American Labor Party",
     "Anti-Administration Party",
     "Anti-Masonic Party",
+    "Anti-Monopoly Party",
     "Bull Moose Party",
     "Conservative Party",
     "Constitutional Union Party",
@@ -140,6 +141,7 @@ PARTY_NAME_ALIASES = {
     "Republican Party": "Republican Party",
     "Unconditional Unionist Party (US)": "Unconditional Unionist Party",
     "Anti-Administration Party (US)": "Anti-Administration Party",
+    "Anti-Monopoly Party (US)": "Anti-Monopoly Party",
     "Conservative Party (US)": "Conservative Party",
     "Constitutional Union Party (US)": "Constitutional Union Party",
     "Democratic Party (US)": "Democratic Party",
@@ -166,6 +168,7 @@ PARTY_WIKIPEDIA_PAGE_TITLES = {
     "American Labor Party": "American Labor Party",
     "Anti-Administration Party": "Anti-Administration Party",
     "Anti-Masonic Party": "Anti-Masonic Party",
+    "Anti-Monopoly Party": "Anti-Monopoly Party",
     "Bull Moose Party": "Bull Moose Party",
     "Conservative Party": "Conservative Party (United States)",
     "Constitutional Union Party": "Constitutional Union Party",
@@ -457,6 +460,43 @@ def parse_congress_representatives(page_wikitext: str, term: str, congress_numbe
         party_name = parse_party_name(match.group(0))
         add_member_row(state_text, district_text, target, party_name)
 
+    # Some entries list replacement members on indented follow-up lines without
+    # repeating the Ushr district template.
+    line_district_pattern = re.compile(
+        r"\{\{[Uu]shr\|(?P<state>[^|}]+)\|(?P<district>[^|}]+)\|(?P<mode>[^|}]+)\}\}"
+    )
+    line_member_pattern = re.compile(r"\[\[(?P<target>[^\[\]]+)\]\]")
+    current_state: str | None = None
+    current_district: str | None = None
+    last_ushr_line_index: int | None = None
+    for line_index, raw_line in enumerate(section.splitlines()):
+        district_match = line_district_pattern.search(raw_line)
+        if district_match:
+            current_state = district_match.group("state").strip()
+            current_district = district_match.group("district").strip()
+            last_ushr_line_index = line_index
+
+        if not current_state or not current_district:
+            continue
+        if not raw_line.lstrip().startswith(":"):
+            continue
+        if "{{Party stripe|" not in raw_line:
+            continue
+        if line_district_pattern.search(raw_line):
+            continue
+        if last_ushr_line_index is None or line_index - last_ushr_line_index > 2:
+            continue
+        if re.search(r"\bvacant\b", raw_line, re.IGNORECASE):
+            continue
+
+        member_match = line_member_pattern.search(raw_line)
+        if not member_match:
+            continue
+        target = member_match.group("target").strip()
+        if target.startswith(("File:", "Image:")):
+            continue
+        add_member_row(current_state, current_district, target, parse_party_name(raw_line))
+
     for match in vacancy_pattern.finditer(section):
         state_text = match.group("state").strip()
         district_text = match.group("district").strip()
@@ -656,11 +696,45 @@ def parse_rows(table_wikitext: str) -> list[RepresentativeRow]:
 def parse_historical_rows(start_congress: int, end_congress: int) -> list[RepresentativeRow]:
     rows: list[RepresentativeRow] = []
 
+    def validate_modern_district_member_counts(
+        congress_rows: list[RepresentativeRow],
+        congress_number: int,
+    ) -> None:
+        """Fail fast on parser regressions that explode members per district.
+
+        Modern Congress pages should not map large numbers of non-vacant members
+        to a single district in one term. A threshold of 4 is intentionally
+        generous for multi-special-election edge cases while still catching
+        context-bleed parsing bugs.
+        """
+
+        if congress_number < 100:
+            return
+
+        members_by_district: dict[tuple[str, str], list[str]] = {}
+        for row in congress_rows:
+            if row.vacant:
+                continue
+            key = (row.state, row.district)
+            members = members_by_district.setdefault(key, [])
+            if row.representative_name not in members:
+                members.append(row.representative_name)
+
+        for (state, district), members in members_by_district.items():
+            if len(members) > 4:
+                sample = ", ".join(members[:8])
+                raise AssumptionViolationError(
+                    "Implausible number of non-vacant members mapped to one "
+                    f"district in Congress {congress_number}: {state}-{district} has "
+                    f"{len(members)} members. Sample: {sample}."
+                )
+
     for congress_number in range(start_congress, end_congress + 1):
         page_title = congress_page_title(congress_number)
         page_wikitext = fetch_wikitext(page_title)
         term = str(congress_number)
         congress_rows = parse_congress_representatives(page_wikitext, term, congress_number)
+        validate_modern_district_member_counts(congress_rows, congress_number)
         expected_min_rows = expected_representatives_for_congress(page_wikitext, congress_number)
         if len(congress_rows) < expected_min_rows:
             raise AssumptionViolationError(
