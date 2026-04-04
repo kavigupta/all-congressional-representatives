@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DISCLAIMER: This parser intentionally does not validate the third Ushr argument.
 
-Export current U.S. representatives from Wikipedia to CSV.
+Export all U.S. representatives across every Congress to one CSV.
 
 The script uses the MediaWiki API to fetch the wikitext for the Wikipedia page
 "List of current United States representatives", parses the "List of
@@ -18,13 +18,11 @@ No third-party dependencies are required.
 
 from __future__ import annotations
 
-import argparse
 import csv
 import datetime as dt
 from dataclasses import asdict, dataclass
 import json
 import re
-import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -34,6 +32,7 @@ import us
 
 API_URL = "https://en.wikipedia.org/w/api.php"
 DEFAULT_PAGE_TITLE = "List of current United States representatives"
+DEFAULT_OUTPUT_PATH = "representatives.csv"
 REPRESENTATIVE_CELL_INDEX = 1
 DISTRICT_CELL_INDEX = 0
 TERM_CELL_INDEX = 7
@@ -45,7 +44,6 @@ CSV_FIELDS = [
     "district",
     "vacant",
 ]
-MIN_MODERN_CONGRESS = 64
 SPECIAL_STATE_IDENTIFIERS = {
     "American Samoa": "American Samoa",
     "Arizona Territory": "Arizona Territory",
@@ -518,61 +516,15 @@ def write_csv(rows: list[RepresentativeRow], output_path: Path) -> None:
         writer.writerows(asdict(row) for row in rows)
 
 
-def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--historical",
-        action="store_true",
-        help="Export representative rows from every United States Congress page up to the current Congress.",
-    )
-    parser.add_argument(
-        "--start-congress",
-        type=int,
-        help="First Congress number to export when using --historical (default: 1).",
-    )
-    parser.add_argument(
-        "--end-congress",
-        type=int,
-        help="Last Congress number to export when using --historical (default: current Congress).",
-    )
-    parser.add_argument(
-        "--page-title",
-        default=DEFAULT_PAGE_TITLE,
-        help=f'Wikipedia page title to read (default: "{DEFAULT_PAGE_TITLE}")',
-    )
-    parser.add_argument(
-        "--output",
-        default="representatives.csv",
-        help="Output CSV file path (default: representatives.csv)",
-    )
-    return parser.parse_args(argv)
+def main() -> int:
+    current_wikitext = fetch_wikitext(DEFAULT_PAGE_TITLE)
+    current_congress = extract_congress_number_from_current_page(current_wikitext)
+    rows = parse_historical_rows(1, current_congress)
 
-
-def main(argv: list[str]) -> int:
-    args = parse_args(argv)
-
-    if args.historical:
-        current_wikitext = fetch_wikitext(args.page_title)
-        current_congress = extract_congress_number_from_current_page(current_wikitext)
-        start_congress = args.start_congress if args.start_congress is not None else 1
-        end_congress = args.end_congress if args.end_congress is not None else current_congress
-        if start_congress < 1 or end_congress < start_congress:
-            raise AssumptionViolationError(
-                f"Invalid Congress range start={start_congress}, end={end_congress}."
-            )
-        rows = parse_historical_rows(start_congress, end_congress)
-    else:
-        wikitext = fetch_wikitext(args.page_title)
-        table_wikitext = extract_representatives_table(wikitext)
-        rows = parse_rows(table_wikitext)
-
-    if not rows:
-        raise AssumptionViolationError("Parser produced zero rows.")
-
-    write_csv(rows, Path(args.output))
-    print(f"Wrote {len(rows)} rows to {args.output}")
+    write_csv(rows, Path(DEFAULT_OUTPUT_PATH))
+    print(f"Wrote {len(rows)} rows to {DEFAULT_OUTPUT_PATH}")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    raise SystemExit(main())
