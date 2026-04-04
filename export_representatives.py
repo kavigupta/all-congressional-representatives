@@ -43,9 +43,9 @@ CSV_FIELDS = [
     "term",
     "state",
     "district",
+    "vacant",
 ]
 MIN_MODERN_CONGRESS = 64
-MIN_MODERN_REPRESENTATIVE_ROWS = 430
 SPECIAL_STATE_IDENTIFIERS = {
     "American Samoa": "American Samoa",
     "Arizona Territory": "Arizona Territory",
@@ -67,6 +67,11 @@ SPECIAL_STATE_IDENTIFIERS = {
     "Washington Territory": "Washington Territory",
     "Wyoming Territory": "Wyoming Territory",
 }
+SPECIAL_CONGRESS_EXPECTED_REPS = {
+    4: 105,
+    107: 435,
+    111: 435,
+}
 
 
 @dataclass(frozen=True)
@@ -76,6 +81,7 @@ class RepresentativeRow:
     term: str
     state: str
     district: str
+    vacant: bool
 
 
 class AssumptionViolationError(RuntimeError):
@@ -167,6 +173,24 @@ def congress_term_start(wikitext: str) -> str:
     return format_simple_date(start_text)
 
 
+def expected_representatives_for_congress(page_wikitext: str, congress_number: int) -> int:
+    try:
+        reps_value = extract_infobox_field(page_wikitext, "reps")
+    except AssumptionViolationError:
+        special_reps = SPECIAL_CONGRESS_EXPECTED_REPS.get(congress_number)
+        if special_reps is not None:
+            return special_reps
+        raise
+    number_tokens = [int(token) for token in re.findall(r"\d+", reps_value)]
+    if not number_tokens:
+        raise AssumptionViolationError(
+            f"Could not parse a numeric representative count from infobox reps field for Congress {congress_number}: {reps_value!r}"
+        )
+
+    # Some pages use ranges like "105-106"; enforce the lower bound as minimum expected rows.
+    return min(number_tokens)
+
+
 def extract_representatives_table(wikitext: str) -> str:
     start_marker = "==List of representatives=="
     end_marker = "==List of delegates=="
@@ -219,16 +243,17 @@ def parse_congress_representatives(page_wikitext: str, term: str) -> list[Repres
         r"\[\[(?P<target>[^\[\]]+)\]\]",
         re.DOTALL,
     )
+    vacancy_pattern = re.compile(
+        r"\{\{[Uu]shr\|(?P<state>[^|}]+)\|(?P<district>[^|}]+)\|(?P<mode>[^|}]+)\}\}(?:\.|)\s*"
+        r"(?:''|\{\{0\|[^}]*\}\}|\{\{small\|[^}]*\}\}|\{\{efn\|[^}]*\}\}|\s)*"
+        r"vacant\b",
+        re.IGNORECASE,
+    )
 
     for match in entry_pattern.finditer(section):
         state_text = match.group("state").strip()
         district_text = match.group("district").strip()
         target = match.group("target").strip()
-        if target.lower() == "vacant":
-            raise AssumptionViolationError(
-                f"Encountered vacant seat in historical parser for state {state_text!r}, district {district_text!r}."
-            )
-
         page_title = target.split("|", 1)[0].strip()
         display_name = target.split("|", 1)[-1].strip() if "|" in target else page_title
         state_name = resolve_state_name(state_text, "Congress representatives section")
@@ -240,6 +265,22 @@ def parse_congress_representatives(page_wikitext: str, term: str) -> list[Repres
                 term=term,
                 state=state_name,
                 district=district_text,
+                vacant=False,
+            )
+        )
+
+    for match in vacancy_pattern.finditer(section):
+        state_text = match.group("state").strip()
+        district_text = match.group("district").strip()
+        state_name = resolve_state_name(state_text, "Congress representatives section")
+        rows.append(
+            RepresentativeRow(
+                representative_name="Vacant",
+                representative_wikipedia_page="",
+                term=term,
+                state=state_name,
+                district=district_text,
+                vacant=True,
             )
         )
 
@@ -373,6 +414,7 @@ def parse_rows(table_wikitext: str) -> list[RepresentativeRow]:
                 term=term,
                 state=state,
                 district=district,
+                vacant=False,
             )
         )
 
@@ -387,11 +429,11 @@ def parse_historical_rows(start_congress: int, end_congress: int) -> list[Repres
         page_wikitext = fetch_wikitext(page_title)
         term = page_title
         congress_rows = parse_congress_representatives(page_wikitext, term)
-        if congress_number >= MIN_MODERN_CONGRESS and len(congress_rows) < MIN_MODERN_REPRESENTATIVE_ROWS:
+        expected_min_rows = expected_representatives_for_congress(page_wikitext, congress_number)
+        if len(congress_rows) < expected_min_rows:
             raise AssumptionViolationError(
-                f"Historical parser produced suspiciously low row count for modern Congress {congress_number}: "
-                f"{len(congress_rows)} rows (< {MIN_MODERN_REPRESENTATIVE_ROWS}). "
-                "Assumption violated: modern Congress pages should be near full House membership."
+                f"Historical parser produced too few rows for Congress {congress_number}: "
+                f"{len(congress_rows)} rows (< expected minimum {expected_min_rows} from infobox reps field)."
             )
         rows.extend(congress_rows)
 
