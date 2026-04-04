@@ -16,7 +16,10 @@ The main output file, `representatives.csv`, includes:
 - `vacant`: `True` if the seat was vacant for that row, otherwise `False`.
 - `party`: Normalized party name for the representative at that time.
 
-The `party_pages.json` file maps party names to Wikipedia page URLs when available.
+The `party_pages.json` file maps party names to objects with:
+
+- `wikipedia_page`: Party Wikipedia page URL when available.
+- `party_color`: One of `red`, `orange`, `yellow`, `green`, `cyan`, `blue`, `purple`, `magenta`, `gray`.
 
 ## Notes
 

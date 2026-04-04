@@ -16,7 +16,7 @@ representatives" table, and writes a CSV with:
 - party
 
 The script also writes a separate `party_pages.json` file mapping party names to
-actual Wikipedia article URLs when a real page exists.
+metadata (Wikipedia article URL and party color) when a real page exists.
 
 No third-party dependencies are required.
 """
@@ -209,7 +209,65 @@ PARTY_WIKIPEDIA_PAGE_TITLES = {
     "Unconditional Unionist Party": "Unconditional Unionist Party",
     "Whig Party": "Whig Party (United States)",
 }
+ALLOWED_PARTY_COLORS = {
+    "red",
+    "orange",
+    "yellow",
+    "green",
+    "cyan",
+    "blue",
+    "purple",
+    "magenta",
+    "gray",
+    "black",
+}
 
+PARTY_COLOR_BY_PARTY = {
+    "American Labor Party": "red",  # socialist-leaning labor party
+    "Anti-Administration Party": "blue",  # Jefferson/Madison faction → became Democratic-Republican
+    "Anti-Masonic Party": "yellow",  # commonly shown yellow/gold
+    "Anti-Monopoly Party": "green",  # third party/agrarian → green fine
+    "Bull Moose Party": "yellow",  # Progressive Party 1912 → conventionally shown as gold/yellow
+    "Conservative Party": "blue",  # NY Conservative Party aligns with right/blue
+    "Constitutional Union Party": "orange",  # no strong convention; orange is acceptable
+    "Democratic Party": "blue",  # correct
+    "Democratic-Republican Party": "green",  # Wikipedia standard is green
+    "Farmer–Labor Party": "green",  # correct
+    "Federalist Party": "black",  # Wikipedia standard is black
+    "Free Soil Party": "green",  # conventionally shown as gold/green; green acceptable
+    "Fusion Party": "gray",  # correct
+    "Greenback Party": "green",  # correct
+    "Independent": "gray",  # correct
+    "Independent Democratic Party": "blue",  # correct
+    "Independent Republican": "red",  # correct
+    "Independent-Republicans of Minnesota": "red",  # correct
+    "Jacksonian Party": "blue",  # correct — precursor to Democrats
+    "Know Nothing": "blue",  # Wikipedia standard is blue (American Party)
+    "Liberal Party": "yellow",  # NY Liberal Party → conventionally yellow
+    "Liberal Republican Party": "blue",  # breakaway Republicans → conventionally blue
+    "Libertarian Party": "yellow",  # correct (gold/yellow is Libertarian standard)
+    "Minnesota Democratic–Farmer–Labor Party": "blue",  # correct
+    "National Republican Party": "orange",  # Wikipedia standard is orange (not red)
+    "National Union Party": "blue",  # Lincoln's 1864 fusion ticket → blue
+    "Nonpartisan League": "gray",  # correct
+    "North Dakota Democratic-NPL Party": "blue",  # correct
+    "Nullifier Party": "green",  # Wikipedia standard is green
+    "Opposition Party": "gray",  # correct
+    "Popular Democratic Party": "blue",  # Puerto Rico PPD → blue
+    "Populist Party": "green",  # correct
+    "Progressive Party": "green",  # correct (LaFollette etc.)
+    "Pro-Administration Party": "orange",  # correct (Federalist-leaning)
+    "Prohibition Party": "blue",  # Wikipedia standard is blue
+    "Readjuster Party": "green",  # Wikipedia standard is green
+    "Republican Party": "red",  # correct
+    "Silver Party": "gray",  # Wikipedia standard is gray/silver
+    "Silver Republican Party": "gray",  # breakaway → silver/gray
+    "Socialist Party": "red",  # correct (should be red)
+    "States' Rights Party": "green",  # Wikipedia standard is green (Dixiecrats)
+    "Unionist Party": "purple",  # acceptable
+    "Unconditional Unionist Party": "purple",  # acceptable
+    "Whig Party": "orange",  # correct — Wikipedia standard is orange
+}
 
 @dataclass(frozen=True)
 class RepresentativeRow:
@@ -388,6 +446,17 @@ def party_wikipedia_page_url(party_name: str) -> str:
     if not page_title:
         return ""
     return to_wikipedia_url(page_title)
+
+
+def party_color(party_name: str) -> str:
+    color = PARTY_COLOR_BY_PARTY.get(party_name)
+    if color is None:
+        raise AssumptionViolationError(f"Missing party color mapping for {party_name!r}.")
+    if color not in ALLOWED_PARTY_COLORS:
+        raise AssumptionViolationError(
+            f"Invalid party color {color!r} for {party_name!r}; must be one of {sorted(ALLOWED_PARTY_COLORS)}."
+        )
+    return color
 
 
 def parse_party_name(member_markup: str) -> str:
@@ -756,7 +825,10 @@ def write_csv(rows: list[RepresentativeRow], output_path: Path) -> None:
 
 def write_party_pages_json(rows: list[RepresentativeRow], output_path: Path) -> None:
     party_pages = {
-        party: party_wikipedia_page_url(party)
+        party: {
+            "wikipedia_page": party_wikipedia_page_url(party),
+            "party_color": party_color(party),
+        }
         for party in sorted({row.party for row in rows if row.party})
         if party_wikipedia_page_url(party)
     }
