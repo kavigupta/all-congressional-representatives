@@ -659,7 +659,7 @@ def parse_historical_rows(start_congress: int, end_congress: int) -> list[Repres
     for congress_number in range(start_congress, end_congress + 1):
         page_title = congress_page_title(congress_number)
         page_wikitext = fetch_wikitext(page_title)
-        term = page_title
+        term = str(congress_number)
         congress_rows = parse_congress_representatives(page_wikitext, term, congress_number)
         expected_min_rows = expected_representatives_for_congress(page_wikitext, congress_number)
         if len(congress_rows) < expected_min_rows:
