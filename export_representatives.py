@@ -12,6 +12,9 @@ representatives" table, and writes a CSV with:
 - term (assumed office)
 - state
 - district
+- vacant
+- party
+- party Wikipedia page URL
 
 No third-party dependencies are required.
 """
@@ -44,6 +47,7 @@ CSV_FIELDS = [
     "district",
     "vacant",
     "party",
+    "party_wikipedia_page",
 ]
 SPECIAL_STATE_IDENTIFIERS = {
     "American Samoa": "American Samoa",
@@ -75,6 +79,131 @@ SPECIAL_DISTRICT_NORMALIZATION = {
     (7, "Pennsylvania", "4A"): "4",
     (7, "Pennsylvania", "4B"): "4",
 }
+ALLOWED_PARTY_NAMES = {
+    "",
+    "American Labor Party",
+    "Anti-Administration Party",
+    "Anti-Masonic Party",
+    "Bull Moose Party",
+    "Conservative Party",
+    "Constitutional Union Party",
+    "Democratic Party",
+    "Democratic-Republican Party",
+    "Farmer–Labor Party",
+    "Federalist Party",
+    "Free Soil Party",
+    "Fusion Party",
+    "Greenback Party",
+    "Independent",
+    "Independent Democratic Party",
+    "Independent Republican",
+    "Independent-Republicans of Minnesota",
+    "Jacksonian Party",
+    "Know Nothing",
+    "Liberal Party",
+    "Liberal Republican Party",
+    "Libertarian Party",
+    "Minnesota Democratic–Farmer–Labor Party",
+    "National Republican Party",
+    "National Union Party",
+    "Nonpartisan League",
+    "North Dakota Democratic-NPL Party",
+    "Nullifier Party",
+    "Opposition Party",
+    "Popular Democratic Party",
+    "Populist Party",
+    "Progressive Party",
+    "Pro-Administration Party",
+    "Prohibition Party",
+    "Readjuster Party",
+    "Republican Party",
+    "Silver Party",
+    "Silver Republican Party",
+    "Socialist Party",
+    "States' Rights Party",
+    "Unionist Party",
+    "Unconditional Unionist Party",
+    "Whig Party",
+}
+PARTY_NAME_ALIASES = {
+    "Democratic Party (United States)": "Democratic Party",
+    "Democratic-Republican (Adams)": "Democratic-Republican Party",
+    "Democratic-Republican (Jackson)": "Democratic-Republican Party",
+    "Democratic-Republican (Crawford)": "Democratic-Republican Party",
+    "Democratic-Republican Party (US)": "Democratic-Republican Party",
+    "Independent Democratic Party (US": "Independent Democratic Party",
+    "Independent Republican Party (US)": "Independent Republican",
+    "Independent Whig": "Whig Party",
+    "National Republican Party": "National Republican Party",
+    "Republican Party": "Republican Party",
+    "Unconditional Unionist Party (US)": "Unconditional Unionist Party",
+    "Anti-Administration Party (US)": "Anti-Administration Party",
+    "Conservative Party (US)": "Conservative Party",
+    "Constitutional Union Party (US)": "Constitutional Union Party",
+    "Democratic Party (US)": "Democratic Party",
+    "Independent (US)": "Independent",
+    "Independent Democratic Party (US)": "Independent Democratic Party",
+    "Independent Republican (US)": "Independent Republican",
+    "Liberal Party (New York)": "Liberal Party",
+    "Liberal Republican Party (US)": "Liberal Republican Party",
+    "Libertarian Party (US)": "Libertarian Party",
+    "National Republican Party (US)": "National Republican Party",
+    "National Union Party (US)": "National Union Party",
+    "Opposition Party (US)": "Opposition Party",
+    "Popular Democratic Party (Puerto Rico)": "Popular Democratic Party",
+    "Populist Party (US)": "Populist Party",
+    "Progressive Party (US)": "Progressive Party",
+    "Pro-Administration Party (US)": "Pro-Administration Party",
+    "Republican Party (US)": "Republican Party",
+    "Socialist Party (US)": "Socialist Party",
+    "Unionist Party (US)": "Unionist Party",
+    "Fusion Party (South Dakota)": "Fusion Party",
+    "Whig Party (US)": "Whig Party",
+}
+PARTY_WIKIPEDIA_PAGE_TITLES = {
+    "American Labor Party": "American Labor Party",
+    "Anti-Administration Party": "Anti-Administration Party",
+    "Anti-Masonic Party": "Anti-Masonic Party",
+    "Bull Moose Party": "Bull Moose Party",
+    "Conservative Party": "Conservative Party (United States)",
+    "Constitutional Union Party": "Constitutional Union Party",
+    "Democratic Party": "Democratic Party (United States)",
+    "Democratic-Republican Party": "Democratic-Republican Party",
+    "Farmer–Labor Party": "Farmer–Labor Party",
+    "Federalist Party": "Federalist Party",
+    "Free Soil Party": "Free Soil Party",
+    "Fusion Party": "Fusion Party (South Dakota)",
+    "Greenback Party": "Greenback Party",
+    "Independent Democratic Party": "Independent Democratic Party (United States)",
+    "Independent Republican": "Independent Republican Party",
+    "Independent-Republicans of Minnesota": "Independent-Republicans of Minnesota",
+    "Jacksonian Party": "Jacksonian Party",
+    "Know Nothing": "Know Nothing",
+    "Liberal Party": "Liberal Party (New York)",
+    "Liberal Republican Party": "Liberal Republican Party (United States)",
+    "Libertarian Party": "Libertarian Party (United States)",
+    "Minnesota Democratic–Farmer–Labor Party": "Minnesota Democratic–Farmer–Labor Party",
+    "National Republican Party": "National Republican Party (United States)",
+    "National Union Party": "National Union Party (United States)",
+    "Nonpartisan League": "Nonpartisan League",
+    "North Dakota Democratic-NPL Party": "North Dakota Democratic-NPL Party",
+    "Nullifier Party": "Nullifier Party",
+    "Opposition Party": "Opposition Party (United States)",
+    "Popular Democratic Party": "Popular Democratic Party (Puerto Rico)",
+    "Populist Party": "Populist Party (United States)",
+    "Progressive Party": "Progressive Party (United States)",
+    "Pro-Administration Party": "Pro-Administration Party",
+    "Prohibition Party": "Prohibition Party",
+    "Readjuster Party": "Readjuster Party",
+    "Republican Party": "Republican Party (United States)",
+    "Silver Party": "Silver Party",
+    "Silver Republican Party": "Silver Republican Party",
+    "Socialist Party": "Socialist Party (United States)",
+    "States' Rights Party": "States' Rights Party",
+    "Unionist Party": "Unionist Party (United States)",
+    "Unconditional Unionist Party": "Unconditional Unionist Party",
+    "Whig Party": "Whig Party (United States)",
+}
 
 
 @dataclass(frozen=True)
@@ -86,6 +215,7 @@ class RepresentativeRow:
     district: str
     vacant: bool
     party: str
+    party_wikipedia_page: str
 
 
 class AssumptionViolationError(RuntimeError):
@@ -241,13 +371,28 @@ def normalize_historical_district(congress_number: int, state_text: str, distric
     return SPECIAL_DISTRICT_NORMALIZATION.get((congress_number, state_text, district_text), district_text)
 
 
+def normalize_party_name(party_name: str) -> str:
+    cleaned = party_name.strip()
+    normalized = PARTY_NAME_ALIASES.get(cleaned, cleaned)
+    if normalized not in ALLOWED_PARTY_NAMES:
+        raise AssumptionViolationError(f"Unexpected party name {cleaned!r} normalized to {normalized!r}.")
+    return normalized
+
+
+def party_wikipedia_page(party_name: str) -> str:
+    page_title = PARTY_WIKIPEDIA_PAGE_TITLES.get(party_name, "")
+    if not page_title:
+        return ""
+    return to_wikipedia_url(page_title)
+
+
 def parse_party_name(member_markup: str) -> str:
     match = re.search(r"\{\{Party stripe\|([^}]+)\}\}", member_markup)
     if not match:
         return ""
 
     party_name = match.group(1).strip()
-    return party_name
+    return normalize_party_name(party_name)
 
 
 def parse_congress_representatives(page_wikitext: str, term: str, congress_number: int) -> list[RepresentativeRow]:
@@ -268,6 +413,7 @@ def parse_congress_representatives(page_wikitext: str, term: str, congress_numbe
             district=normalized_district,
             vacant=False,
             party=party,
+            party_wikipedia_page=party_wikipedia_page(party),
         )
         key = (row.state, row.district, row.representative_wikipedia_page, row.vacant)
         if key not in seen_keys:
@@ -285,6 +431,7 @@ def parse_congress_representatives(page_wikitext: str, term: str, congress_numbe
             district=normalized_district,
             vacant=True,
             party="",
+            party_wikipedia_page="",
         )
         key = (row.state, row.district, row.representative_wikipedia_page, row.vacant)
         if key not in seen_keys:
@@ -501,6 +648,7 @@ def parse_rows(table_wikitext: str) -> list[RepresentativeRow]:
                 district=district,
                 vacant=False,
                 party="",
+                party_wikipedia_page="",
             )
         )
 
