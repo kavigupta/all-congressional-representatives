@@ -14,7 +14,9 @@ representatives" table, and writes a CSV with:
 - district
 - vacant
 - party
-- party Wikipedia page URL
+
+The script also writes a separate `party_pages.json` file mapping party names to
+actual Wikipedia article URLs when a real page exists.
 
 No third-party dependencies are required.
 """
@@ -36,6 +38,7 @@ import us
 API_URL = "https://en.wikipedia.org/w/api.php"
 DEFAULT_PAGE_TITLE = "List of current United States representatives"
 DEFAULT_OUTPUT_PATH = "representatives.csv"
+DEFAULT_PARTY_PAGES_PATH = "party_pages.json"
 REPRESENTATIVE_CELL_INDEX = 1
 DISTRICT_CELL_INDEX = 0
 TERM_CELL_INDEX = 7
@@ -47,7 +50,6 @@ CSV_FIELDS = [
     "district",
     "vacant",
     "party",
-    "party_wikipedia_page",
 ]
 SPECIAL_STATE_IDENTIFIERS = {
     "American Samoa": "American Samoa",
@@ -172,14 +174,14 @@ PARTY_WIKIPEDIA_PAGE_TITLES = {
     "Farmer–Labor Party": "Farmer–Labor Party",
     "Federalist Party": "Federalist Party",
     "Free Soil Party": "Free Soil Party",
-    "Fusion Party": "Fusion Party (South Dakota)",
+    "Fusion Party": "",
     "Greenback Party": "Greenback Party",
     "Independent Democratic Party": "Independent Democratic Party (United States)",
-    "Independent Republican": "Independent Republican Party",
+    "Independent Republican": "Independent Republican (United States)",
     "Independent-Republicans of Minnesota": "Independent-Republicans of Minnesota",
     "Jacksonian Party": "Jacksonian Party",
     "Know Nothing": "Know Nothing",
-    "Liberal Party": "Liberal Party (New York)",
+    "Liberal Party": "Liberal Party of New York",
     "Liberal Republican Party": "Liberal Republican Party (United States)",
     "Libertarian Party": "Libertarian Party (United States)",
     "Minnesota Democratic–Farmer–Labor Party": "Minnesota Democratic–Farmer–Labor Party",
@@ -215,7 +217,6 @@ class RepresentativeRow:
     district: str
     vacant: bool
     party: str
-    party_wikipedia_page: str
 
 
 class AssumptionViolationError(RuntimeError):
@@ -379,7 +380,7 @@ def normalize_party_name(party_name: str) -> str:
     return normalized
 
 
-def party_wikipedia_page(party_name: str) -> str:
+def party_wikipedia_page_url(party_name: str) -> str:
     page_title = PARTY_WIKIPEDIA_PAGE_TITLES.get(party_name, "")
     if not page_title:
         return ""
@@ -413,7 +414,6 @@ def parse_congress_representatives(page_wikitext: str, term: str, congress_numbe
             district=normalized_district,
             vacant=False,
             party=party,
-            party_wikipedia_page=party_wikipedia_page(party),
         )
         key = (row.state, row.district, row.representative_wikipedia_page, row.vacant)
         if key not in seen_keys:
@@ -431,7 +431,6 @@ def parse_congress_representatives(page_wikitext: str, term: str, congress_numbe
             district=normalized_district,
             vacant=True,
             party="",
-            party_wikipedia_page="",
         )
         key = (row.state, row.district, row.representative_wikipedia_page, row.vacant)
         if key not in seen_keys:
@@ -648,7 +647,6 @@ def parse_rows(table_wikitext: str) -> list[RepresentativeRow]:
                 district=district,
                 vacant=False,
                 party="",
-                party_wikipedia_page="",
             )
         )
 
@@ -682,12 +680,25 @@ def write_csv(rows: list[RepresentativeRow], output_path: Path) -> None:
         writer.writerows(asdict(row) for row in rows)
 
 
+def write_party_pages_json(rows: list[RepresentativeRow], output_path: Path) -> None:
+    party_pages = {
+        party: party_wikipedia_page_url(party)
+        for party in sorted({row.party for row in rows if row.party})
+        if party_wikipedia_page_url(party)
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as file:
+        json.dump(party_pages, file, indent=2, ensure_ascii=False, sort_keys=True)
+        file.write("\n")
+
+
 def main() -> int:
     current_wikitext = fetch_wikitext(DEFAULT_PAGE_TITLE)
     current_congress = extract_congress_number_from_current_page(current_wikitext)
     rows = parse_historical_rows(1, current_congress)
 
     write_csv(rows, Path(DEFAULT_OUTPUT_PATH))
+    write_party_pages_json(rows, Path(DEFAULT_PARTY_PAGES_PATH))
     print(f"Wrote {len(rows)} rows to {DEFAULT_OUTPUT_PATH}")
     return 0
 
