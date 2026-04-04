@@ -2,6 +2,8 @@
 
 This repository contains a script and exported data for U.S. House representatives across Congresses.
 
+Data source: Wikipedia only. This project exclusively uses Wikipedia pages/API as its source data.
+
 ## Fields
 
 The main output file, `representatives.csv`, includes:
