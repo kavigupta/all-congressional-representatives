@@ -28,9 +28,12 @@ import datetime as dt
 from dataclasses import asdict, dataclass
 import json
 import re
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+from permacache import permacache
 
 import us
 
@@ -39,6 +42,8 @@ API_URL = "https://en.wikipedia.org/w/api.php"
 DEFAULT_PAGE_TITLE = "List of current United States representatives"
 DEFAULT_OUTPUT_PATH = "representatives.csv"
 DEFAULT_PARTY_PAGES_PATH = "party_pages.json"
+WIKIPEDIA_API_REQUEST_DELAY_SECONDS = 0.15
+WIKIPEDIA_API_REQUEST_TIMEOUT_SECONDS = 45
 REPRESENTATIVE_CELL_INDEX = 1
 DISTRICT_CELL_INDEX = 0
 TERM_CELL_INDEX = 7
@@ -475,12 +480,12 @@ def parse_congress_representatives(page_wikitext: str, term: str, congress_numbe
 
     def add_member_row(state_text: str, district_text: str, target: str, party: str = "") -> None:
         page_title = target.split("|", 1)[0].strip()
-        display_name = target.split("|", 1)[-1].strip() if "|" in target else page_title
+        resolved_title, page_url = resolve_wikipedia_page(page_title)
         state_name = resolve_state_name(state_text, "Congress representatives section")
         normalized_district = normalize_historical_district(congress_number, state_text, district_text)
         row = RepresentativeRow(
-            representative_name=display_name,
-            representative_wikipedia_page=to_wikipedia_url(page_title),
+            representative_name=normalize_representative_name(resolved_title),
+            representative_wikipedia_page=page_url,
             term=term,
             state=state_name,
             district=normalized_district,
@@ -708,8 +713,7 @@ def extract_representative(member_cell: str) -> tuple[str, str]:
         if target.startswith(("File:", "Image:")):
             continue
         page_title = target.split("|", 1)[0].strip()
-        display_name = target.split("|", 1)[-1].strip() if "|" in target else page_title
-        return display_name, page_title
+        return page_title, page_title
     raise AssumptionViolationError(f"Could not parse representative link from member cell: {member_cell!r}")
 
 
@@ -733,6 +737,47 @@ def to_wikipedia_url(page_title: str) -> str:
     return "https://en.wikipedia.org/wiki/" + urllib.parse.quote(slug, safe="()/_")
 
 
+@permacache("export_representatives/resolve_wikipedia_page")
+def resolve_wikipedia_page(page_title: str) -> tuple[str, str]:
+    time.sleep(WIKIPEDIA_API_REQUEST_DELAY_SECONDS)
+    params = urllib.parse.urlencode(
+        {
+            "action": "query",
+            "titles": page_title,
+            "redirects": 1,
+            "prop": "info",
+            "inprop": "url",
+            "format": "json",
+            "formatversion": "2",
+        }
+    )
+    url = f"{API_URL}?{params}"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; WikipediaCSVExport/1.0; +https://example.com)",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=WIKIPEDIA_API_REQUEST_TIMEOUT_SECONDS) as response:
+        payload = json.load(response)
+
+    try:
+        page = payload["query"]["pages"][0]
+    except (KeyError, IndexError) as exc:  # pragma: no cover - defensive API error handling
+        raise AssumptionViolationError(
+            f"Wikipedia API response missing query.pages for page {page_title!r}. Payload keys: {list(payload.keys())}"
+        ) from exc
+
+    resolved_title = page.get("title", page_title)
+    canonical_url = page.get("canonicalurl") or to_wikipedia_url(resolved_title)
+    return resolved_title, canonical_url
+
+
+def normalize_representative_name(page_title: str) -> str:
+    cleaned = re.sub(r"\s*\([^()]*\)\s*$", "", page_title).strip()
+    return re.sub(r"\s+", " ", cleaned)
+
+
 def parse_rows(table_wikitext: str) -> list[RepresentativeRow]:
     results: list[RepresentativeRow] = []
 
@@ -744,13 +789,14 @@ def parse_rows(table_wikitext: str) -> list[RepresentativeRow]:
             )
 
         state, district = extract_state_and_district(cells[DISTRICT_CELL_INDEX])
-        representative_name, page_title = extract_representative(cells[REPRESENTATIVE_CELL_INDEX])
+        _, page_title = extract_representative(cells[REPRESENTATIVE_CELL_INDEX])
         term = extract_term(cells[TERM_CELL_INDEX])
+        resolved_title, page_url = resolve_wikipedia_page(page_title)
 
         results.append(
             RepresentativeRow(
-                representative_name=representative_name,
-                representative_wikipedia_page=to_wikipedia_url(page_title),
+                representative_name=normalize_representative_name(resolved_title),
+                representative_wikipedia_page=page_url,
                 term=term,
                 state=state,
                 district=district,
